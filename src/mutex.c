@@ -22,6 +22,7 @@
 
 /* misc libraries */
 #include <time.h>
+#include <signal.h>
 #include <math.h>
 
 /*  arbitrary range for update index passed to math functions*/
@@ -133,61 +134,62 @@ void print_attitude(void){
 }
 
 void *update_attitude(void *threadp) {
-
 	while(1) {
 		sem_wait(&rel_update);
+	/****************************CRITICAL SECTION*****************************/
 		pthread_mutex_lock(&mutex);
-
-		for(; i < UPDATE_MAX_INDEX; i++) {
-			current_attitude.latitude       = (0.01 * i);
-			current_attitude.longitude      = (0.2  * i);
-			current_attitude.altitude       = (0.25 * i);
-			current_attitude.roll           = sin(i);
-			current_attitude.pitch          = cos(i * i);
-			current_attitude.yaw            = cos(i);
-			clock_gettime(CLOCK_REALTIME, &current_attitude.sample_time);
-		}
+		current_attitude.latitude       = (0.01 * i);
+		current_attitude.longitude      = (0.2  * i);
+		current_attitude.altitude       = (0.25 * i);
+		current_attitude.roll           = sin(i);
+		current_attitude.pitch          = cos(i * i);
+		current_attitude.yaw            = cos(i);
+		clock_gettime(CLOCK_REALTIME, &current_attitude.sample_time);
 		pthread_mutex_unlock(&mutex);
-
-	/* reset update index to min value */
-    	i = UPDATE_MIN_INDEX;
+	/*************************************************************************/
+	/* increment update index, reset to min value if necessary*/
+		i++;
+		if(i >= UPDATE_MAX_INDEX) {
+			i = UPDATE_MIN_INDEX;
+		}
 	}
 }
 
 void *read_attitude(void *threadp) {
-	
 	while(1){
 		sem_wait(&rel_read);
+	/****************************CRITICAL SECTION*****************************/
 		pthread_mutex_lock(&mutex);
-		print_attitude();
+    	print_attitude();
 		pthread_mutex_unlock(&mutex);
+	/*************************************************************************/
 	}
 }
 
 int main(void) { 
 	struct timespec current_time;
 	struct timespec prev_time;
+	struct sigevent sev;
+	timer_t timerid;
 
 	pthread_create(&update, 0, update_attitude, 0);
 	pthread_create(&read, 0, read_attitude, 0);
 
-	sem_init(&rel_update, 0, 0);
-    sem_init(&rel_read, 0, 0);
+	timer_create(CLOCK_MONOTONIC, &sev, &timerid);
 
-/* get release start time */
-	clock_gettime(CLOCK_REALTIME, &prev_time);
+/* semaphores for controlling update and read service release */
+	sem_init(&rel_update, 0, 1);
+  	sem_init(&rel_read, 0, 0);
+
 	while(1){
 	/* get current time for comparison */
 		clock_gettime(CLOCK_REALTIME, &current_time);
 
 	/* release update every second */
-		if(timestamp(&prev_time) - timestamp(&current_time) > 1000 ) {
-			sem_post(&rel_update);
-		}
+		sem_post(&rel_update);
 
 	/* release read every 100ms */
-		if(timestamp(&prev_time) - timestamp(&current_time) > 100 ) {
-			sem_post(&rel_read);
-		}
+		sem_post(&rel_read);
+
 	}
 }
