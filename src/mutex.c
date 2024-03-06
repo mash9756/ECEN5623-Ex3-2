@@ -6,33 +6,35 @@
  *  @date   03/9/2024
  * 
  *  @cite   https://github.com/mash9756/ECEN5623-Ex1
- *            using timestamp, delta_t, and sleep_ms previously written for the above assignment
- * 
- *	@note	currently does not work as intended, need to investigate mutex locking and timing
+ *            using timestamp, and sleep_ms previously written for the above assignment
 */
 
 #define _GNU_SOURCE
 /* standard libraries */
 #include <stdio.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 /* posix thread libraries */
 #include <pthread.h>
-#include <semaphore.h>
 
 /* misc libraries */
 #include <time.h>
-#include <signal.h>
 #include <math.h>
 
-/*  arbitrary range for update index passed to math functions*/
+/* arbitrary range for update index passed to math functions */
 #define UPDATE_MAX_INDEX    (10.0000)
 #define UPDATE_MIN_INDEX    (-10.0000)
 
-/* defines for time conversions */
-#define MSEC_PER_SEC  (1000)
-#define NSEC_PER_MSEC (1000000)
-#define NSEC_PER_SEC  (1000000000)
+/* time conversion values */
+#define MSEC_PER_SEC  		(1000)
+#define NSEC_PER_MSEC 		(1000000)
+#define NSEC_PER_SEC  		(1000000000)
+
+/* thread timing values */
+#define UPDATE_TIME_MS		(1000)
+#define READER_TIME_MS		(10000)
+#define TOTAL_TIME_MS		(180000)
 
 /* attitude structure definition */
 typedef struct
@@ -50,11 +52,7 @@ typedef struct
 /******************************************************************************************************/
 /* thread IDs */
 pthread_t update;
-pthread_t read;
-
-/* semaphores for release control */
-sem_t rel_update;
-sem_t rel_read;
+pthread_t reader;
 
 /* global attitude resource */
 attitude_t current_attitude;
@@ -62,48 +60,13 @@ attitude_t current_attitude;
 /* mutex to protect access to current_attitude */
 pthread_mutex_t mutex;
 
-/* index for update value loop, using double as casting as double wasn't working for some reason */
-static double i = UPDATE_MIN_INDEX;
+/* thread done flag */
+bool done = false;
 /******************************************************************************************************/
 
 /* calculates a duration in ms with added precision */
 double timestamp(struct timespec *duration) {
     return (double)(duration->tv_sec) + (double)((double)duration->tv_nsec / NSEC_PER_MSEC);
-}
-
-int delta_t(struct timespec *stop, struct timespec *start, struct timespec *delta_t)
-{
-  int dt_sec=stop->tv_sec - start->tv_sec;
-  int dt_nsec=stop->tv_nsec - start->tv_nsec;
-
-  if(dt_sec >= 0)
-  {
-    if(dt_nsec >= 0)
-    {
-      delta_t->tv_sec=dt_sec;
-      delta_t->tv_nsec=dt_nsec;
-    }
-    else
-    {
-      delta_t->tv_sec=dt_sec-1;
-      delta_t->tv_nsec=NSEC_PER_SEC+dt_nsec;
-    }
-  }
-  else
-  {
-    if(dt_nsec >= 0)
-    {
-      delta_t->tv_sec=dt_sec;
-      delta_t->tv_nsec=dt_nsec;
-    }
-    else
-    {
-      delta_t->tv_sec=dt_sec-1;
-      delta_t->tv_nsec=NSEC_PER_SEC+dt_nsec;
-    }
-  }
-
-  return(1);
 }
 
 /* simple sleep function with ms parameter for ease of use */
@@ -124,6 +87,7 @@ int sleep_ms(int ms) {
 }
 
 void print_attitude(void){
+	printf("\n***************************************************************************\n");
 	printf("\tLatitude:\t%.04f\n", 	current_attitude.latitude);
 	printf("\tLongitude:\t%.04f\n", current_attitude.longitude);
 	printf("\tAltitude:\t%.04f\n", 	current_attitude.altitude);
@@ -131,11 +95,13 @@ void print_attitude(void){
 	printf("\tPitch:\t\t%.04f\n", 	current_attitude.pitch);
 	printf("\tYaw:\t\t%.04f\n", 	current_attitude.yaw);
 	printf("\tTimestamp:\t%.04f\n", timestamp(&current_attitude.sample_time));
+	printf("***************************************************************************\n");
 }
 
 void *update_attitude(void *threadp) {
-	while(1) {
-		sem_wait(&rel_update);
+/* index for update value loop, using double for type compat with math functions */
+	double i = UPDATE_MIN_INDEX;
+	while(!done) {
 	/****************************CRITICAL SECTION*****************************/
 		pthread_mutex_lock(&mutex);
 		current_attitude.latitude       = (0.01 * i);
@@ -152,44 +118,32 @@ void *update_attitude(void *threadp) {
 		if(i >= UPDATE_MAX_INDEX) {
 			i = UPDATE_MIN_INDEX;
 		}
+		sleep_ms(UPDATE_TIME_MS);
 	}
 }
 
 void *read_attitude(void *threadp) {
-	while(1){
-		sem_wait(&rel_read);
+	int cnt = 0;
+	while(!done){
+		printf("\nRead Count: %d", cnt++);
 	/****************************CRITICAL SECTION*****************************/
 		pthread_mutex_lock(&mutex);
     	print_attitude();
 		pthread_mutex_unlock(&mutex);
 	/*************************************************************************/
+		sleep_ms(READER_TIME_MS);
 	}
 }
 
 int main(void) { 
-	struct timespec current_time;
-	struct timespec prev_time;
-	struct sigevent sev;
-	timer_t timerid;
-
 	pthread_create(&update, 0, update_attitude, 0);
-	pthread_create(&read, 0, read_attitude, 0);
+	pthread_create(&reader, 0, read_attitude, 0);
 
-	timer_create(CLOCK_MONOTONIC, &sev, &timerid);
+	sleep_ms(TOTAL_TIME_MS);
+	done = true;
 
-/* semaphores for controlling update and read service release */
-	sem_init(&rel_update, 0, 1);
-  	sem_init(&rel_read, 0, 0);
+	pthread_join(update, NULL);
+	pthread_join(reader, NULL);
 
-	while(1){
-	/* get current time for comparison */
-		clock_gettime(CLOCK_REALTIME, &current_time);
-
-	/* release update every second */
-		sem_post(&rel_update);
-
-	/* release read every 100ms */
-		sem_post(&rel_read);
-
-	}
+	return 0;
 }
