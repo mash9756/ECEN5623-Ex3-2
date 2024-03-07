@@ -28,7 +28,8 @@
 
 /* time conversion values */
 #define MSEC_PER_SEC  		(1000)
-#define NSEC_PER_MSEC 		(1000000)
+#define MSEC_PER_SEC_D  	(1000.00)
+#define NSEC_PER_MSEC 		(1000000.00)
 #define NSEC_PER_SEC  		(1000000000)
 
 /* thread timing values */
@@ -62,11 +63,41 @@ pthread_mutex_t mutex;
 
 /* thread done flag */
 bool done = false;
+
+struct timespec start_time;
 /******************************************************************************************************/
 
-/* calculates a duration in ms with added precision */
-double timestamp(struct timespec *duration) {
-    return (double)(duration->tv_sec) + (double)((double)duration->tv_nsec / NSEC_PER_MSEC);
+/* calculates a timestamp in ms with added precision */
+double timestamp_ms(struct timespec *start, struct timespec *stop) {
+	double start_sec 	= (double)(start->tv_sec);
+	double start_nsec 	= (double)(start->tv_nsec);
+	double stop_sec 	= (double)(stop->tv_sec);
+	double stop_nsec 	= (double)(stop->tv_nsec);
+
+	double start_ms		= (start_sec * MSEC_PER_SEC_D) + (start_nsec / NSEC_PER_MSEC);
+	double stop_ms		= (stop_sec * MSEC_PER_SEC_D) + (stop_nsec / NSEC_PER_MSEC);
+
+	return (stop_ms - start_ms);
+}
+
+/* calculates a timestamp in s with added precision */
+double timestamp_s(struct timespec *start, struct timespec *stop) {
+	double start_sec 	= (double)(start->tv_sec);
+	double start_nsec 	= (double)(start->tv_nsec);
+	double stop_sec 	= (double)(stop->tv_sec);
+	double stop_nsec 	= (double)(stop->tv_nsec);
+
+	double start_s		= (start_sec) + (start_nsec / NSEC_PER_SEC);
+	double stop_s		= (stop_sec) + (stop_nsec / NSEC_PER_SEC);
+
+	return (stop_s - start_s);
+}
+
+/* calculate total current time in seconds and print */
+void get_total_time(){
+	struct timespec current_time;
+	clock_gettime(CLOCK_MONOTONIC, &current_time);
+	printf("Total Time: %.02fs\n", timestamp_s(&start_time, &current_time));
 }
 
 /* simple sleep function with ms parameter for ease of use */
@@ -87,15 +118,15 @@ int sleep_ms(int ms) {
 }
 
 void print_attitude(void){
-	printf("\n***************************************************************************\n");
-	printf("\tLatitude:\t%.04f\n", 	current_attitude.latitude);
-	printf("\tLongitude:\t%.04f\n", current_attitude.longitude);
-	printf("\tAltitude:\t%.04f\n", 	current_attitude.altitude);
-	printf("\tRoll:\t\t%.04f\n", 	current_attitude.roll);
-	printf("\tPitch:\t\t%.04f\n", 	current_attitude.pitch);
-	printf("\tYaw:\t\t%.04f\n", 	current_attitude.yaw);
-	printf("\tTimestamp:\t%.04f\n", timestamp(&current_attitude.sample_time));
-	printf("***************************************************************************\n");
+	printf("\n*****************************************************************\n");
+	printf("\tLatitude:\t%.04f\n", 		current_attitude.latitude);
+	printf("\tLongitude:\t%.04f\n", 	current_attitude.longitude);
+	printf("\tAltitude:\t%.04f\n", 		current_attitude.altitude);
+	printf("\tRoll:\t\t%.04f\n", 		current_attitude.roll);
+	printf("\tPitch:\t\t%.04f\n", 		current_attitude.pitch);
+	printf("\tYaw:\t\t%.04f\n", 		current_attitude.yaw);
+	printf("\tTimestamp:\t%.02fms\n", 	timestamp_ms(&start_time, &current_attitude.sample_time));
+	printf("*****************************************************************\n");
 }
 
 void *update_attitude(void *threadp) {
@@ -110,7 +141,7 @@ void *update_attitude(void *threadp) {
 		current_attitude.roll           = sin(i);
 		current_attitude.pitch          = cos(i * i);
 		current_attitude.yaw            = cos(i);
-		clock_gettime(CLOCK_REALTIME, &current_attitude.sample_time);
+		clock_gettime(CLOCK_MONOTONIC, &current_attitude.sample_time);
 		pthread_mutex_unlock(&mutex);
 	/*************************************************************************/
 	/* increment update index, reset to min value if necessary*/
@@ -131,19 +162,25 @@ void *read_attitude(void *threadp) {
     	print_attitude();
 		pthread_mutex_unlock(&mutex);
 	/*************************************************************************/
+		get_total_time();
 		sleep_ms(READER_TIME_MS);
 	}
 }
 
 int main(void) { 
+/* save exact start time, could assume 0 here but we want best accuracy */
+	clock_gettime(CLOCK_MONOTONIC, &start_time);
+
 	pthread_create(&update, 0, update_attitude, 0);
 	pthread_create(&reader, 0, read_attitude, 0);
 
+/* sleep main so reader/update thread can run, set done flag to end */
 	sleep_ms(TOTAL_TIME_MS);
 	done = true;
 
 	pthread_join(update, NULL);
 	pthread_join(reader, NULL);
 
+	get_total_time();
 	return 0;
 }
